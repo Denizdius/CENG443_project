@@ -33,7 +33,9 @@ __global__ void hgemm_normal(const half* A, const half* B, float* C) {
     if (row < N && col < N) {
         float sum = 0.0f;
         for (int k = 0; k < N; k++) {
-            sum += __half2float(A[row * N + k]) * __half2float(B[k * N + col]);
+            float a_val = __half2float(A[row * N + k]);
+            float b_val = __half2float(B[k * N + col]);
+            sum += a_val * b_val;
         }
         C[row * N + col] = sum;
     }
