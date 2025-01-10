@@ -78,11 +78,12 @@ int main() {
     float *c_tensor_d, *c_cuda_d;
     __half *a_half_d, *b_half_d;
     
-    // Create CUDA streams
+    // Create CUDA streams with highest priority for Tensor Core stream
     cudaStream_t streams[NUM_STREAMS];
-    for (int i = 0; i < NUM_STREAMS; i++) {
-        CUDA_CHECK(cudaStreamCreate(&streams[i]));
-    }
+    int priority_high, priority_low;
+    CUDA_CHECK(cudaDeviceGetStreamPriorityRange(&priority_low, &priority_high));
+    CUDA_CHECK(cudaStreamCreateWithPriority(&streams[1], cudaStreamNonBlocking, priority_high));  // Tensor Core stream
+    CUDA_CHECK(cudaStreamCreateWithPriority(&streams[0], cudaStreamNonBlocking, priority_low));   // CUDA Core stream
 
     // Allocate host memory with pinned memory for better transfer performance
     CUDA_CHECK(cudaMallocHost(&a_h, N * N * sizeof(float)));
@@ -114,23 +115,27 @@ int main() {
 
     // Setup timing
     cudaEvent_t start, stop;
+    cudaEvent_t tensor_done, cuda_done;
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
+    CUDA_CHECK(cudaEventCreate(&tensor_done));
+    CUDA_CHECK(cudaEventCreate(&cuda_done));
 
     // Record start time
     CUDA_CHECK(cudaEventRecord(start));
 
-    // Stream 0: CUDA core operations
-    CUDA_CHECK(cudaMemcpyAsync(a_d, a_h, N * N * sizeof(float), 
-                              cudaMemcpyHostToDevice, streams[0]));
-    CUDA_CHECK(cudaMemcpyAsync(b_d, b_h, N * N * sizeof(float), 
-                              cudaMemcpyHostToDevice, streams[0]));
-
-    // Stream 1: Tensor core operations
+    // First stage: All H2D transfers
+    // Stream 1 (Tensor Core) operations
     CUDA_CHECK(cudaMemcpyAsync(a_half_d, a_half_h, N * N * sizeof(__half), 
                               cudaMemcpyHostToDevice, streams[1]));
     CUDA_CHECK(cudaMemcpyAsync(b_half_d, b_half_h, N * N * sizeof(__half), 
                               cudaMemcpyHostToDevice, streams[1]));
+
+    // Stream 0 (CUDA Core) operations
+    CUDA_CHECK(cudaMemcpyAsync(a_d, a_h, N * N * sizeof(float), 
+                              cudaMemcpyHostToDevice, streams[0]));
+    CUDA_CHECK(cudaMemcpyAsync(b_d, b_h, N * N * sizeof(float), 
+                              cudaMemcpyHostToDevice, streams[0]));
 
     // Launch configuration
     dim3 grid_tensor((N + WMMA_M - 1) / WMMA_M, (N + WMMA_N - 1) / WMMA_N);
@@ -138,17 +143,23 @@ int main() {
     dim3 grid_cuda((N + BLOCK_SIZE - 1) / BLOCK_SIZE, (N + BLOCK_SIZE - 1) / BLOCK_SIZE);
     dim3 block_cuda(BLOCK_SIZE, BLOCK_SIZE);
 
-    // Launch kernels in their respective streams
-    sgemm_cuda_core<<<grid_cuda, block_cuda, 0, streams[0]>>>(
-        a_d, b_d, c_cuda_d, N);
+    // Second stage: Launch kernels independently
     sgemm_tensor_core<<<grid_tensor, block_tensor, 0, streams[1]>>>(
         a_half_d, b_half_d, c_tensor_d, N);
+    CUDA_CHECK(cudaEventRecord(tensor_done, streams[1]));
 
-    // Asynchronous memory transfers back to host
-    CUDA_CHECK(cudaMemcpyAsync(c_cuda_h, c_cuda_d, N * N * sizeof(float), 
-                              cudaMemcpyDeviceToHost, streams[0]));
+    sgemm_cuda_core<<<grid_cuda, block_cuda, 0, streams[0]>>>(
+        a_d, b_d, c_cuda_d, N);
+    CUDA_CHECK(cudaEventRecord(cuda_done, streams[0]));
+
+    // Third stage: D2H transfers (each stream waits only for its own kernel)
+    CUDA_CHECK(cudaStreamWaitEvent(streams[1], tensor_done));
     CUDA_CHECK(cudaMemcpyAsync(c_tensor_h, c_tensor_d, N * N * sizeof(float), 
                               cudaMemcpyDeviceToHost, streams[1]));
+
+    CUDA_CHECK(cudaStreamWaitEvent(streams[0], cuda_done));
+    CUDA_CHECK(cudaMemcpyAsync(c_cuda_h, c_cuda_d, N * N * sizeof(float), 
+                              cudaMemcpyDeviceToHost, streams[0]));
 
     // Record stop time after all operations
     CUDA_CHECK(cudaEventRecord(stop));
@@ -184,6 +195,8 @@ int main() {
 
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
+    CUDA_CHECK(cudaEventDestroy(tensor_done));
+    CUDA_CHECK(cudaEventDestroy(cuda_done));
     
     // Destroy streams
     for (int i = 0; i < NUM_STREAMS; i++) {
