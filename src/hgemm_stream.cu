@@ -137,36 +137,6 @@ int main() {
 
     float ms_normal = 0, ms_tensor = 0, ms_stream = 0;
 
-    // Test 1: All Normal CUDA cores with multiple streams
-    /*printf("\n=== Normal CUDA Cores Performance (Full Matrix) ===\n");
-    CUDA_CHECK(cudaEventRecord(start));
-    for (int i = 0; i < NUM_STREAMS; i++) {
-        int offset = i * chunk_size;
-        hgemm_normal<<<gridDim_normal, blockDim_normal, 0, streams[i]>>>(
-            a_d, b_d, c_d, offset, chunk_size);
-    }
-    CUDA_CHECK(cudaEventRecord(stop));
-    CUDA_CHECK(cudaEventSynchronize(stop));
-    CUDA_CHECK(cudaEventElapsedTime(&ms_normal, start, stop));
-
-    // Clear output buffer
-    CUDA_CHECK(cudaMemset(c_d, 0, N * N * sizeof(float)));*/
-
-    // Test 2: All Tensor cores with multiple streams
-    /*printf("\n=== Tensor Cores Performance (Full Matrix) ===\n");
-    CUDA_CHECK(cudaEventRecord(start));
-    for (int i = 0; i < NUM_STREAMS; i++) {
-        int offset = i * chunk_size;
-        hgemm_tensor_core<<<gridDim_tensor, blockDim_tensor, 0, streams[i]>>>(
-            a_d, b_d, c_d, offset, chunk_size);
-    }
-    CUDA_CHECK(cudaEventRecord(stop));
-    CUDA_CHECK(cudaEventSynchronize(stop));
-    CUDA_CHECK(cudaEventElapsedTime(&ms_tensor, start, stop));
-
-    // Clear output buffer
-    CUDA_CHECK(cudaMemset(c_d, 0, N * N * sizeof(float)));*/
-
     // Test 3: Mixed Tensor and Normal cores with multiple streams
     printf("\n=== Concurrent HGEMM Performance (Mixed Tensor + Normal) ===\n");
     CUDA_CHECK(cudaEventRecord(start));
@@ -180,11 +150,11 @@ int main() {
         int tensor_offset = i * small_chunk;
         int normal_offset = (N/2) + i * small_chunk;
         
-        // Launch a tensor core kernel
+        // Launch a tensor core kernel in stream 0
         hgemm_tensor_core<<<gridDim_tensor, blockDim_tensor, 0, streams[0]>>>(
             a_d, b_d, c_d, tensor_offset, small_chunk);
             
-        // Launch a normal kernel in different stream
+        // Launch a normal kernel in stream 1
         hgemm_normal<<<gridDim_normal, blockDim_normal, 0, streams[1]>>>(
             a_d, b_d, c_d, normal_offset, small_chunk);
     }
