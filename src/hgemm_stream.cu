@@ -45,39 +45,39 @@ __global__ void hgemm_normal(const half* A, const half* B, float* C, int start_i
 }
 
 __global__ void hgemm_tensor_core(const half* A, const half* B, float* C, int start_idx, int chunk_size) {
-    // Each warp computes a 16x16 output tile
+    // Calculate warp and matrix positions
     int warpM = (blockIdx.x * blockDim.x + threadIdx.x) / WARP_SIZE;
     int warpN = blockIdx.y;
-
+    
     // Adjust warpM based on chunk
     warpM += start_idx / WMMA_M;
 
-    // Check if this warp should process this chunk
-    if (warpM * WMMA_M >= start_idx + chunk_size) {
-        return;
+    // Ensure all threads in warp participate in WMMA operations
+    if ((warpM * WMMA_M) < (start_idx + chunk_size)) {
+        // Declare the fragments
+        nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, WMMA_M, WMMA_N, WMMA_K, half, nvcuda::wmma::row_major> a_frag;
+        nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, WMMA_M, WMMA_N, WMMA_K, half, nvcuda::wmma::row_major> b_frag;
+        nvcuda::wmma::fragment<nvcuda::wmma::accumulator, WMMA_M, WMMA_N, WMMA_K, float> acc_frag;
+
+        // Initialize the output to zero
+        nvcuda::wmma::fill_fragment(acc_frag, 0.0f);
+
+        // Load and multiply
+        for (int k = 0; k < N; k += WMMA_K) {
+            const half* a_tile = A + (warpM * WMMA_M) * N + k;
+            const half* b_tile = B + k * N + warpN * WMMA_N;
+            
+            nvcuda::wmma::load_matrix_sync(a_frag, a_tile, N);
+            nvcuda::wmma::load_matrix_sync(b_frag, b_tile, N);
+            nvcuda::wmma::mma_sync(acc_frag, a_frag, b_frag, acc_frag);
+        }
+
+        // Store the output
+        float* c_tile = C + (warpM * WMMA_M) * N + warpN * WMMA_N;
+        nvcuda::wmma::store_matrix_sync(c_tile, acc_frag, N, nvcuda::wmma::mem_row_major);
     }
-
-    // Declare the fragments
-    nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, WMMA_M, WMMA_N, WMMA_K, half, nvcuda::wmma::row_major> a_frag;
-    nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, WMMA_M, WMMA_N, WMMA_K, half, nvcuda::wmma::row_major> b_frag;
-    nvcuda::wmma::fragment<nvcuda::wmma::accumulator, WMMA_M, WMMA_N, WMMA_K, float> acc_frag;
-
-    // Initialize the output to zero
-    nvcuda::wmma::fill_fragment(acc_frag, 0.0f);
-
-    // Load and multiply
-    for (int k = 0; k < N; k += WMMA_K) {
-        const half* a_tile = A + (warpM * WMMA_M) * N + k;
-        const half* b_tile = B + k * N + warpN * WMMA_N;
-        
-        nvcuda::wmma::load_matrix_sync(a_frag, a_tile, N);
-        nvcuda::wmma::load_matrix_sync(b_frag, b_tile, N);
-        nvcuda::wmma::mma_sync(acc_frag, a_frag, b_frag, acc_frag);
-    }
-
-    // Store the output
-    float* c_tile = C + (warpM * WMMA_M) * N + warpN * WMMA_N;
-    nvcuda::wmma::store_matrix_sync(c_tile, acc_frag, N, nvcuda::wmma::mem_row_major);
+    // Ensure warp synchronization
+    __syncwarp();
 }
 
 int main() {
@@ -137,26 +137,68 @@ int main() {
 
     float ms_normal = 0, ms_tensor = 0, ms_stream = 0;
 
+    // Test 1: All Normal CUDA cores with multiple streams
+    /*printf("\n=== Normal CUDA Cores Performance (Full Matrix) ===\n");
+    CUDA_CHECK(cudaEventRecord(start));
+    for (int i = 0; i < NUM_STREAMS; i++) {
+        int offset = i * chunk_size;
+        hgemm_normal<<<gridDim_normal, blockDim_normal, 0, streams[i]>>>(
+            a_d, b_d, c_d, offset, chunk_size);
+    }
+    CUDA_CHECK(cudaEventRecord(stop));
+    CUDA_CHECK(cudaEventSynchronize(stop));
+    CUDA_CHECK(cudaEventElapsedTime(&ms_normal, start, stop));
+
+    // Clear output buffer
+    CUDA_CHECK(cudaMemset(c_d, 0, N * N * sizeof(float)));*/
+
+    // Test 2: All Tensor cores with multiple streams
+    /*printf("\n=== Tensor Cores Performance (Full Matrix) ===\n");
+    CUDA_CHECK(cudaEventRecord(start));
+    for (int i = 0; i < NUM_STREAMS; i++) {
+        int offset = i * chunk_size;
+        hgemm_tensor_core<<<gridDim_tensor, blockDim_tensor, 0, streams[i]>>>(
+            a_d, b_d, c_d, offset, chunk_size);
+    }
+    CUDA_CHECK(cudaEventRecord(stop));
+    CUDA_CHECK(cudaEventSynchronize(stop));
+    CUDA_CHECK(cudaEventElapsedTime(&ms_tensor, start, stop));
+
+    // Clear output buffer
+    CUDA_CHECK(cudaMemset(c_d, 0, N * N * sizeof(float)));*/
+
     // Test 3: Mixed Tensor and Normal cores with multiple streams
     printf("\n=== Concurrent HGEMM Performance (Mixed Tensor + Normal) ===\n");
     CUDA_CHECK(cudaEventRecord(start));
     
     // Divide work into smaller chunks for better overlap
-    const int num_chunks = 8;  // More chunks for better interleaving
+    const int num_chunks = 16;  // Increased number of chunks
     const int small_chunk = chunk_size / num_chunks;
     
-    // Launch kernels in an interleaved pattern
+    // Ensure chunk size is aligned with WMMA tile size
+    const int aligned_chunk = (small_chunk + WMMA_M - 1) / WMMA_M * WMMA_M;
+    
+    // Launch alternating tensor and normal kernels
     for (int i = 0; i < num_chunks; i++) {
-        int tensor_offset = i * small_chunk;
-        int normal_offset = (N/2) + i * small_chunk;
+        // Launch tensor core kernel for first half
+        int tensor_offset = i * aligned_chunk;
+        if (tensor_offset < N/2) {
+            hgemm_tensor_core<<<gridDim_tensor, blockDim_tensor, 0, streams[0]>>>(
+                a_d, b_d, c_d, tensor_offset, aligned_chunk);
+        }
         
-        // Launch a tensor core kernel in stream 0
-        hgemm_tensor_core<<<gridDim_tensor, blockDim_tensor, 0, streams[0]>>>(
-            a_d, b_d, c_d, tensor_offset, small_chunk);
-            
-        // Launch a normal kernel in stream 1
-        hgemm_normal<<<gridDim_normal, blockDim_normal, 0, streams[1]>>>(
-            a_d, b_d, c_d, normal_offset, small_chunk);
+        // Launch normal kernel for second half
+        int normal_offset = N/2 + i * small_chunk;
+        if (normal_offset < N) {
+            hgemm_normal<<<gridDim_normal, blockDim_normal, 0, streams[1]>>>(
+                a_d, b_d, c_d, normal_offset, small_chunk);
+        }
+        
+        // Add small delay between launches to help scheduler
+        if (i < num_chunks-1) {
+            cudaEventRecord(mid_event, streams[0]);
+            cudaStreamWaitEvent(streams[1], mid_event, 0);
+        }
     }
 
     // Copy results back asynchronously
