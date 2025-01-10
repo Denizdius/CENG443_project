@@ -107,9 +107,9 @@ int main() {
     CUDA_CHECK(cudaMalloc(&b_d, N * N * sizeof(half)));
     CUDA_CHECK(cudaMalloc(&c_d, N * N * sizeof(float)));
 
-    // Copy data to device
-    CUDA_CHECK(cudaMemcpy(a_d, a_h, N * N * sizeof(half), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(b_d, b_h, N * N * sizeof(half), cudaMemcpyHostToDevice));
+    // Copy data to device asynchronously using different streams
+    CUDA_CHECK(cudaMemcpyAsync(a_d, a_h, N * N * sizeof(half), cudaMemcpyHostToDevice, streams[0]));
+    CUDA_CHECK(cudaMemcpyAsync(b_d, b_h, N * N * sizeof(half), cudaMemcpyHostToDevice, streams[1]));
 
     // Create CUDA streams
     cudaStream_t streams[NUM_STREAMS];
@@ -171,18 +171,31 @@ int main() {
     printf("\n=== Concurrent HGEMM Performance (Mixed Tensor + Normal) ===\n");
     CUDA_CHECK(cudaEventRecord(start));
     
-    // First launch all tensor core kernels
-    for (int i = 0; i < NUM_STREAMS/2; i++) {
-        int offset = i * chunk_size;
-        hgemm_tensor_core<<<gridDim_tensor, blockDim_tensor, 0, streams[i]>>>(
-            a_d, b_d, c_d, offset, chunk_size);
-    }
+    // Divide work into smaller chunks for better overlap
+    const int num_chunks = 8;  // More chunks for better interleaving
+    const int small_chunk = chunk_size / num_chunks;
     
-    // Immediately launch all normal kernels without waiting
-    for (int i = 0; i < NUM_STREAMS/2; i++) {
-        int offset = i * chunk_size;
-        hgemm_normal<<<gridDim_normal, blockDim_normal, 0, streams[i + NUM_STREAMS/2]>>>(
-            a_d, b_d, c_d, offset + (N/2), chunk_size);
+    // Launch kernels in an interleaved pattern
+    for (int i = 0; i < num_chunks; i++) {
+        int tensor_offset = i * small_chunk;
+        int normal_offset = (N/2) + i * small_chunk;
+        
+        // Launch a tensor core kernel
+        hgemm_tensor_core<<<gridDim_tensor, blockDim_tensor, 0, streams[0]>>>(
+            a_d, b_d, c_d, tensor_offset, small_chunk);
+            
+        // Launch a normal kernel in different stream
+        hgemm_normal<<<gridDim_normal, blockDim_normal, 0, streams[1]>>>(
+            a_d, b_d, c_d, normal_offset, small_chunk);
+    }
+
+    // Copy results back asynchronously
+    float *c_verify_h = new float[N * N];
+    CUDA_CHECK(cudaMemcpyAsync(c_verify_h, c_d, N * N * sizeof(float), cudaMemcpyDeviceToHost, streams[0]));
+
+    // Synchronize all streams before checking results
+    for (int i = 0; i < NUM_STREAMS; i++) {
+        CUDA_CHECK(cudaStreamSynchronize(streams[i]));
     }
 
     CUDA_CHECK(cudaEventRecord(stop));
@@ -196,9 +209,6 @@ int main() {
     printf("Mixed version (concurrent tensor + normal) time: %.3f ms\n", ms_stream);
 
     // Verify results
-    float *c_verify_h = new float[N * N];
-    CUDA_CHECK(cudaMemcpy(c_verify_h, c_d, N * N * sizeof(float), cudaMemcpyDeviceToHost));
-    
     printf("\n=== Result Verification ===\n");
     printf("C[0][0] = %.0f\n", c_verify_h[0]);
     printf("C[%d][0] = %.0f\n", N/2, c_verify_h[(N/2) * N]);
