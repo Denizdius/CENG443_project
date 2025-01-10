@@ -7,9 +7,11 @@
 // Enable Tensor Core operations
 #pragma enable_tf32_tensor_core_optimization
 
-#define N 1024
+// Increased matrix size for better analysis
+#define N 4096  // Increased from 1024 to 4096
 #define BLOCK_SIZE 16
 #define WARP_SIZE 32
+#define NUM_STREAMS 4  // Using 4 streams for better concurrency
 
 // WMMA matrix tiles
 const int WMMA_M = 16;
@@ -104,28 +106,24 @@ int main() {
     CUDA_CHECK(cudaMalloc(&a_d, N * N * sizeof(half)));
     CUDA_CHECK(cudaMalloc(&b_d, N * N * sizeof(half)));
     CUDA_CHECK(cudaMalloc(&c_d, N * N * sizeof(float)));
-    
-    // Additional output buffers for concurrent execution
-    float *c_stream1_d, *c_stream2_d;
-    CUDA_CHECK(cudaMalloc(&c_stream1_d, N * N * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&c_stream2_d, N * N * sizeof(float)));
 
     // Copy data to device
     CUDA_CHECK(cudaMemcpy(a_d, a_h, N * N * sizeof(half), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(b_d, b_h, N * N * sizeof(half), cudaMemcpyHostToDevice));
 
     // Create CUDA streams
-    cudaStream_t stream_tensor, stream_normal;
-    CUDA_CHECK(cudaStreamCreate(&stream_tensor));
-    CUDA_CHECK(cudaStreamCreate(&stream_normal));
+    cudaStream_t streams[NUM_STREAMS];
+    for (int i = 0; i < NUM_STREAMS; i++) {
+        CUDA_CHECK(cudaStreamCreate(&streams[i]));
+    }
 
     // Setup timing
     cudaEvent_t start, stop;
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
 
-    // Divide the matrix into two parts (ensure it's WMMA aligned)
-    const int chunk_size = (N / 2 / WMMA_M) * WMMA_M;
+    // Divide the matrix into NUM_STREAMS parts
+    const int chunk_size = (N / NUM_STREAMS / WMMA_M) * WMMA_M;
 
     // Launch configurations
     dim3 gridDim_tensor((chunk_size + WMMA_M - 1) / WMMA_M, N / WMMA_N);
@@ -139,87 +137,61 @@ int main() {
 
     float ms_normal = 0, ms_tensor = 0, ms_stream = 0;
 
-    // Clear all output buffers
-    CUDA_CHECK(cudaMemset(c_d, 0, N * N * sizeof(float)));
-    CUDA_CHECK(cudaMemset(c_stream1_d, 0, N * N * sizeof(float)));
-    CUDA_CHECK(cudaMemset(c_stream2_d, 0, N * N * sizeof(float)));
-
-    // Test Case 1: Two Tensor Core kernels in different streams
-    printf("\n=== Test Case 1: Two Tensor Core Kernels ===\n");
+    // Test 1: All Normal CUDA cores with multiple streams
+    /*printf("\n=== Normal CUDA Cores Performance (Full Matrix) ===\n");
     CUDA_CHECK(cudaEventRecord(start));
-    
-    hgemm_tensor_core<<<gridDim_tensor, blockDim_tensor, 0, stream_tensor>>>(a_d, b_d, c_stream1_d, 0, chunk_size);
-
-    hgemm_tensor_core<<<gridDim_tensor, blockDim_tensor, 0, stream_normal>>>(a_d, b_d, c_stream2_d, chunk_size, chunk_size);
-    
+    for (int i = 0; i < NUM_STREAMS; i++) {
+        int offset = i * chunk_size;
+        hgemm_normal<<<gridDim_normal, blockDim_normal, 0, streams[i]>>>(
+            a_d, b_d, c_d, offset, chunk_size);
+    }
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaEventSynchronize(stop));
-    CUDA_CHECK(cudaEventElapsedTime(&ms_stream, start, stop));
-    printf("Two Tensor Core kernels time: %.3f ms\n", ms_stream);
+    CUDA_CHECK(cudaEventElapsedTime(&ms_normal, start, stop));
 
-    // Combine results from both streams
-    cudaMemcpyAsync(c_d, c_stream1_d, chunk_size * N * sizeof(float), cudaMemcpyDeviceToDevice, stream_tensor);
-    cudaMemcpyAsync(c_d + chunk_size * N, c_stream2_d + chunk_size * N, chunk_size * N * sizeof(float), cudaMemcpyDeviceToDevice, stream_normal);
-    cudaDeviceSynchronize();
+    // Clear output buffer
+    CUDA_CHECK(cudaMemset(c_d, 0, N * N * sizeof(float)));*/
 
-    // Clear buffers for next test
-    CUDA_CHECK(cudaMemset(c_stream1_d, 0, N * N * sizeof(float)));
-    CUDA_CHECK(cudaMemset(c_stream2_d, 0, N * N * sizeof(float)));
+    // Test 2: All Tensor cores with multiple streams
+    /*printf("\n=== Tensor Cores Performance (Full Matrix) ===\n");
+    CUDA_CHECK(cudaEventRecord(start));
+    for (int i = 0; i < NUM_STREAMS; i++) {
+        int offset = i * chunk_size;
+        hgemm_tensor_core<<<gridDim_tensor, blockDim_tensor, 0, streams[i]>>>(
+            a_d, b_d, c_d, offset, chunk_size);
+    }
+    CUDA_CHECK(cudaEventRecord(stop));
+    CUDA_CHECK(cudaEventSynchronize(stop));
+    CUDA_CHECK(cudaEventElapsedTime(&ms_tensor, start, stop));
 
-    // Test Case 2: Two Normal CUDA kernels in different streams
-    printf("\n=== Test Case 2: Two Normal CUDA Kernels ===\n");
+    // Clear output buffer
+    CUDA_CHECK(cudaMemset(c_d, 0, N * N * sizeof(float)));*/
+
+    // Test 3: Mixed Tensor and Normal cores with multiple streams
+    printf("\n=== Concurrent HGEMM Performance (Mixed Tensor + Normal) ===\n");
     CUDA_CHECK(cudaEventRecord(start));
     
-    hgemm_normal<<<gridDim_normal, blockDim_normal, 0, stream_tensor>>>(
-        a_d, b_d, c_stream1_d, 0, chunk_size);
+    // Launch half tensor cores and half normal cores
+    for (int i = 0; i < NUM_STREAMS/2; i++) {
+        int offset = i * chunk_size;
+        // Tensor core kernels in first half of streams
+        hgemm_tensor_core<<<gridDim_tensor, blockDim_tensor, 0, streams[i]>>>(
+            a_d, b_d, c_d, offset, chunk_size);
         
-    hgemm_normal<<<gridDim_normal, blockDim_normal, 0, stream_normal>>>(
-        a_d, b_d, c_stream2_d, chunk_size, chunk_size);
-    
+        // Normal kernels in second half of streams
+        hgemm_normal<<<gridDim_normal, blockDim_normal, 0, streams[i + NUM_STREAMS/2]>>>(
+            a_d, b_d, c_d, offset + (N/2), chunk_size);
+    }
+
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaEventSynchronize(stop));
     CUDA_CHECK(cudaEventElapsedTime(&ms_stream, start, stop));
-    printf("Two Normal CUDA kernels time: %.3f ms\n", ms_stream);
-
-    // Combine results
-    cudaMemcpyAsync(c_d, c_stream1_d, chunk_size * N * sizeof(float), cudaMemcpyDeviceToDevice, stream_tensor);
-    cudaMemcpyAsync(c_d + chunk_size * N, c_stream2_d + chunk_size * N, chunk_size * N * sizeof(float), cudaMemcpyDeviceToDevice, stream_normal);
-    cudaDeviceSynchronize();
-
-    // Clear buffers for next test
-    CUDA_CHECK(cudaMemset(c_stream1_d, 0, N * N * sizeof(float)));
-    CUDA_CHECK(cudaMemset(c_stream2_d, 0, N * N * sizeof(float)));
-
-    // Test Case 3: Mixed Tensor Core and Normal CUDA kernels
-    printf("\n=== Test Case 3: Mixed Tensor Core and Normal CUDA Kernels ===\n");
-    CUDA_CHECK(cudaEventRecord(start));
-    
-    hgemm_tensor_core<<<gridDim_tensor, blockDim_tensor, 0, stream_tensor>>>(
-        a_d, b_d, c_stream1_d, 0, chunk_size);
-            
-    hgemm_normal<<<gridDim_normal, blockDim_normal, 0, stream_normal>>>(
-        a_d, b_d, c_stream2_d, chunk_size, chunk_size);
-    
-    CUDA_CHECK(cudaEventRecord(stop));
-    CUDA_CHECK(cudaEventSynchronize(stop));
-    CUDA_CHECK(cudaEventElapsedTime(&ms_stream, start, stop));
-    printf("Mixed kernels time: %.3f ms\n", ms_stream);
-
-    // Combine results
-    cudaMemcpyAsync(c_d, c_stream1_d, chunk_size * N * sizeof(float), cudaMemcpyDeviceToDevice, stream_tensor);
-    cudaMemcpyAsync(c_d + chunk_size * N, c_stream2_d + chunk_size * N, chunk_size * N * sizeof(float), cudaMemcpyDeviceToDevice, stream_normal);
-    cudaDeviceSynchronize();
 
     // Print comparative results
-    printf("\n=== Performance Comparison ===\n");
+    printf("\n=== Performance Results ===\n");
     printf("Matrix size: %dx%d\n", N, N);
-    printf("1. Normal CUDA cores (full matrix): %.3f ms\n", ms_normal);
-    printf("2. Tensor cores (full matrix): %.3f ms\n", ms_tensor);
-    printf("3. Streamed version (half tensor + half normal): %.3f ms\n", ms_stream);
-    printf("\nSpeedup Analysis:\n");
-    printf("Tensor vs Normal: %.2fx\n", ms_normal / ms_tensor);
-    printf("Streamed vs Normal: %.2fx\n", ms_normal / ms_stream);
-    printf("Streamed vs Tensor: %.2fx\n", ms_tensor / ms_stream);
+    printf("Number of streams: %d\n", NUM_STREAMS);
+    printf("Mixed version (concurrent tensor + normal) time: %.3f ms\n", ms_stream);
 
     // Verify results
     float *c_verify_h = new float[N * N];
@@ -227,7 +199,7 @@ int main() {
     
     printf("\n=== Result Verification ===\n");
     printf("C[0][0] = %.0f\n", c_verify_h[0]);
-    printf("C[%d][0] = %.0f\n", chunk_size, c_verify_h[chunk_size * N]);
+    printf("C[%d][0] = %.0f\n", N/2, c_verify_h[(N/2) * N]);
     printf("Expected value = %d\n", N);
 
     // Cleanup
@@ -239,13 +211,13 @@ int main() {
     CUDA_CHECK(cudaFree(a_d));
     CUDA_CHECK(cudaFree(b_d));
     CUDA_CHECK(cudaFree(c_d));
-    CUDA_CHECK(cudaFree(c_stream1_d));
-    CUDA_CHECK(cudaFree(c_stream2_d));
     
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
-    CUDA_CHECK(cudaStreamDestroy(stream_tensor));
-    CUDA_CHECK(cudaStreamDestroy(stream_normal));
+    
+    for (int i = 0; i < NUM_STREAMS; i++) {
+        CUDA_CHECK(cudaStreamDestroy(streams[i]));
+    }
 
     return 0;
 }
