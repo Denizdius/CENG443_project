@@ -4,11 +4,9 @@
 #include <stdio.h>
 
 // Constants
-#define N 8192
-#define CHUNK_SIZE (N/16)  // Split matrix into chunks
+#define N 4096
 #define BLOCK_SIZE 16
 #define WARP_SIZE 32
-#define NUM_STREAMS 16
 
 // WMMA dimensions
 const int WMMA_M = 16;
@@ -24,16 +22,12 @@ const int WMMA_K = 16;
     } \
 }
 
-// CUDA core SGEMM kernel for a chunk
-__global__ void sgemm_cuda_core(const float* A, const float* B, float* C, 
-                               int n, int chunk_start, int chunk_size) {
+// CUDA core SGEMM kernel
+__global__ void sgemm_cuda_core(const float* A, const float* B, float* C, int n) {
     int row = blockIdx.y * blockDim.y + threadIdx.y;
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     
-    // Adjust indices for the chunk
-    row += chunk_start;
-    
-    if (row < chunk_start + chunk_size && col < n) {
+    if (row < n/2 && col < n) {  // Process top half of matrix
         float sum = 0.0f;
         #pragma unroll 16
         for (int k = 0; k < n; k++) {
@@ -43,24 +37,24 @@ __global__ void sgemm_cuda_core(const float* A, const float* B, float* C,
     }
 }
 
-// Tensor Core SGEMM kernel for a chunk
-__global__ void sgemm_tensor_core(const __half* A, const __half* B, float* C, 
-                                 int n, int chunk_start, int chunk_size) {
+// Tensor Core SGEMM kernel
+__global__ void sgemm_tensor_core(const __half* A, const __half* B, float* C, int n) {
     using namespace nvcuda::wmma;
     
     fragment<matrix_a, WMMA_M, WMMA_N, WMMA_K, __half, row_major> a_frag;
     fragment<matrix_b, WMMA_M, WMMA_N, WMMA_K, __half, row_major> b_frag;
     fragment<accumulator, WMMA_M, WMMA_N, WMMA_K, float> acc_frag;
 
-    // Adjust warp indices for the chunk
+    // Calculate position - process bottom half of matrix
     int warpM = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
-    warpM += chunk_start / WMMA_M;
     int warpN = blockIdx.y;
+    
+    // Offset to start from middle of matrix
+    warpM += n/(2*WMMA_M);
 
     fill_fragment(acc_frag, 0.0f);
 
-    int chunk_end = (chunk_start + chunk_size) / WMMA_M;
-    if (warpM < chunk_end) {
+    if (warpM * WMMA_M < n) {
         for (int k = 0; k < n; k += WMMA_K) {
             int aRow = warpM * WMMA_M;
             int aCol = k;
@@ -83,39 +77,35 @@ __global__ void sgemm_tensor_core(const __half* A, const __half* B, float* C,
 }
 
 int main() {
-    float *a_h, *b_h;
-    float *c_tensor_h, *c_cuda_h;
-    float *a_d, *b_d;
-    float *c_tensor_d, *c_cuda_d;
+    float *a_h, *b_h, *c_h;
+    float *a_d, *b_d, *c_d;
     __half *a_half_d, *b_half_d;
     
     // Create CUDA streams
-    cudaStream_t streams[NUM_STREAMS];
-    for (int i = 0; i < NUM_STREAMS; i++) {
-        CUDA_CHECK(cudaStreamCreate(&streams[i]));
-    }
+    cudaStream_t stream_cuda, stream_tensor;
+    CUDA_CHECK(cudaStreamCreateWithFlags(&stream_cuda, cudaStreamNonBlocking));
+    CUDA_CHECK(cudaStreamCreateWithFlags(&stream_tensor, cudaStreamNonBlocking));
 
     // Allocate host memory with pinned memory
     CUDA_CHECK(cudaMallocHost(&a_h, N * N * sizeof(float)));
     CUDA_CHECK(cudaMallocHost(&b_h, N * N * sizeof(float)));
-    CUDA_CHECK(cudaMallocHost(&c_tensor_h, N * N * sizeof(float)));
-    CUDA_CHECK(cudaMallocHost(&c_cuda_h, N * N * sizeof(float)));
+    CUDA_CHECK(cudaMallocHost(&c_h, N * N * sizeof(float)));
 
     // Initialize matrices
     for (int i = 0; i < N * N; i++) {
         a_h[i] = 1.0f;
         b_h[i] = 1.0f;
+        c_h[i] = 0.0f;  // Initialize output to zero
     }
 
     // Allocate device memory
     CUDA_CHECK(cudaMalloc(&a_d, N * N * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&b_d, N * N * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&c_tensor_d, N * N * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&c_cuda_d, N * N * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&c_d, N * N * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&a_half_d, N * N * sizeof(__half)));
     CUDA_CHECK(cudaMalloc(&b_half_d, N * N * sizeof(__half)));
 
-    // Convert to half precision
+    // Convert to half precision for Tensor Cores
     __half* a_half_h = new __half[N * N];
     __half* b_half_h = new __half[N * N];
     for (int i = 0; i < N * N; i++) {
@@ -123,41 +113,41 @@ int main() {
         b_half_h[i] = __float2half(b_h[i]);
     }
 
-    // Copy input data to device
-    CUDA_CHECK(cudaMemcpy(a_d, a_h, N * N * sizeof(float), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(b_d, b_h, N * N * sizeof(float), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(a_half_d, a_half_h, N * N * sizeof(__half), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(b_half_d, b_half_h, N * N * sizeof(__half), cudaMemcpyHostToDevice));
+    // Initialize output matrix to zero
+    CUDA_CHECK(cudaMemset(c_d, 0, N * N * sizeof(float)));
+
+    // Asynchronous data transfers
+    CUDA_CHECK(cudaMemcpyAsync(a_d, a_h, N * N * sizeof(float), 
+                              cudaMemcpyHostToDevice, stream_cuda));
+    CUDA_CHECK(cudaMemcpyAsync(b_d, b_h, N * N * sizeof(float), 
+                              cudaMemcpyHostToDevice, stream_cuda));
+    CUDA_CHECK(cudaMemcpyAsync(a_half_d, a_half_h, N * N * sizeof(__half), 
+                              cudaMemcpyHostToDevice, stream_tensor));
+    CUDA_CHECK(cudaMemcpyAsync(b_half_d, b_half_h, N * N * sizeof(__half), 
+                              cudaMemcpyHostToDevice, stream_tensor));
 
     // Setup timing
     cudaEvent_t start, stop;
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
 
-    // Launch configuration for chunks
-    dim3 grid_tensor((CHUNK_SIZE + WMMA_M - 1) / WMMA_M, (N + WMMA_N - 1) / WMMA_N);
+    // Launch configuration
+    dim3 grid_tensor((N/2 + WMMA_M - 1) / WMMA_M, (N + WMMA_N - 1) / WMMA_N);
     dim3 block_tensor(WARP_SIZE, 1);
-    dim3 grid_cuda((N + BLOCK_SIZE - 1) / BLOCK_SIZE, (CHUNK_SIZE + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    dim3 grid_cuda((N + BLOCK_SIZE - 1) / BLOCK_SIZE, (N/2 + BLOCK_SIZE - 1) / BLOCK_SIZE);
     dim3 block_cuda(BLOCK_SIZE, BLOCK_SIZE);
 
     // Record start time
     CUDA_CHECK(cudaEventRecord(start));
 
-    // Process chunks
-    for (int chunk = 0; chunk < N; chunk += CHUNK_SIZE) {
-        // Launch both kernels for their respective chunks
-        sgemm_tensor_core<<<grid_tensor, block_tensor, 0, streams[0]>>>(
-            a_half_d, b_half_d, c_tensor_d, N, chunk, CHUNK_SIZE);
-        
-        sgemm_cuda_core<<<grid_cuda, block_cuda, 0, streams[1]>>>(
-            a_d, b_d, c_cuda_d, N, chunk, CHUNK_SIZE);
-    }
+    // Launch kernels concurrently on different streams
+    // CUDA cores process top half, Tensor cores process bottom half
+    sgemm_cuda_core<<<grid_cuda, block_cuda, 0, stream_cuda>>>(a_d, b_d, c_d, N);
+    sgemm_tensor_core<<<grid_tensor, block_tensor, 0, stream_tensor>>>(a_half_d, b_half_d, c_d, N);
 
-    // Copy results back
-    CUDA_CHECK(cudaMemcpyAsync(c_tensor_h, c_tensor_d, N * N * sizeof(float), 
-                              cudaMemcpyDeviceToHost, streams[0]));
-    CUDA_CHECK(cudaMemcpyAsync(c_cuda_h, c_cuda_d, N * N * sizeof(float), 
-                              cudaMemcpyDeviceToHost, streams[1]));
+    // Copy result back
+    CUDA_CHECK(cudaMemcpyAsync(c_h, c_d, N * N * sizeof(float), 
+                              cudaMemcpyDeviceToHost, stream_cuda));
 
     // Record stop time
     CUDA_CHECK(cudaEventRecord(stop));
@@ -168,36 +158,31 @@ int main() {
     CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
 
     // Print results
-    printf("\n=== Concurrent Chunked GEMM Execution ===\n");
+    printf("\n=== Concurrent GEMM Execution ===\n");
     printf("Matrix size: %dx%d\n", N, N);
-    printf("Chunk size: %d\n", CHUNK_SIZE);
     printf("Total execution time: %.3f ms\n", ms);
     printf("\n=== Result Verification ===\n");
-    printf("Tensor Core C[0][0] = %.0f\n", c_tensor_h[0]);
-    printf("CUDA Core C[0][0] = %.0f\n", c_cuda_h[0]);
+    printf("Top half (CUDA Cores) C[0][0] = %.0f\n", c_h[0]);
+    printf("Bottom half (Tensor Cores) C[%d][0] = %.0f\n", N/2, c_h[(N/2)*N]);
     printf("Expected value = %d\n", N);
 
     // Cleanup
     CUDA_CHECK(cudaFreeHost(a_h));
     CUDA_CHECK(cudaFreeHost(b_h));
-    CUDA_CHECK(cudaFreeHost(c_tensor_h));
-    CUDA_CHECK(cudaFreeHost(c_cuda_h));
+    CUDA_CHECK(cudaFreeHost(c_h));
     delete[] a_half_h;
     delete[] b_half_h;
 
     CUDA_CHECK(cudaFree(a_d));
     CUDA_CHECK(cudaFree(b_d));
-    CUDA_CHECK(cudaFree(c_tensor_d));
-    CUDA_CHECK(cudaFree(c_cuda_d));
+    CUDA_CHECK(cudaFree(c_d));
     CUDA_CHECK(cudaFree(a_half_d));
     CUDA_CHECK(cudaFree(b_half_d));
 
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
-    
-    for (int i = 0; i < NUM_STREAMS; i++) {
-        CUDA_CHECK(cudaStreamDestroy(streams[i]));
-    }
+    CUDA_CHECK(cudaStreamDestroy(stream_cuda));
+    CUDA_CHECK(cudaStreamDestroy(stream_tensor));
 
     return 0;
 }
