@@ -160,14 +160,29 @@ int main() {
     printf("\n=== Concurrent HGEMM Performance (Half Tensor + Half Normal) ===\n");
     CUDA_CHECK(cudaEventRecord(start));
     
+    //1.
     // Launch tensor core kernel for first half in stream_tensor
     hgemm_tensor_core<<<gridDim_tensor, blockDim_tensor, 0, stream_tensor>>>(
         a_d, b_d, c_d, 0, chunk_size);
 
+    hgemm_tensor_core<<<gridDim_tensor, blockDim_tensor, 0, stream_normal>>>(
+        a_d, b_d, c_d, chunk_size, chunk_size);
+      
+    //2.  
     // Launch normal kernel for second half in stream_normal
+    hgemm_normal<<<gridDim_normal, blockDim_normal, 0, stream_tensor>>>(
+        a_d, b_d, c_d, 0, chunk_size);
+        
     hgemm_normal<<<gridDim_normal, blockDim_normal, 0, stream_normal>>>(
         a_d, b_d, c_d, chunk_size, chunk_size);
 
+    //3. 
+    hgemm_tensor_core<<<gridDim_tensor, blockDim_tensor, 0, stream_tensor>>>(
+        a_d, b_d, c_d, 0, chunk_size);
+            
+    hgemm_normal<<<gridDim_normal, blockDim_normal, 0, stream_normal>>>(
+        a_d, b_d, c_d, chunk_size, chunk_size);
+        
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaEventSynchronize(stop));
     CUDA_CHECK(cudaEventElapsedTime(&ms_stream, start, stop));
