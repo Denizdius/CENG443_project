@@ -11,7 +11,7 @@ SRC_SGEMM = sgemm.cu
 SRC_DGEMM = dgemm.cu
 SRC_INT8GEMM = int8gemm.cu
 SRC_HGEMM_STREAM = hgemm_stream.cu
-SRC_SGEMM_STREAM = sgemm_stream.cu
+SRC_SGEMM_STREAM = sgemm_sstream.cu
 
 all: $(TARGETS)
 
