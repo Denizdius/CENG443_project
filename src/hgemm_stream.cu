@@ -107,15 +107,15 @@ int main() {
     CUDA_CHECK(cudaMalloc(&b_d, N * N * sizeof(half)));
     CUDA_CHECK(cudaMalloc(&c_d, N * N * sizeof(float)));
 
-    // Copy data to device asynchronously using different streams
-    CUDA_CHECK(cudaMemcpyAsync(a_d, a_h, N * N * sizeof(half), cudaMemcpyHostToDevice, streams[0]));
-    CUDA_CHECK(cudaMemcpyAsync(b_d, b_h, N * N * sizeof(half), cudaMemcpyHostToDevice, streams[1]));
-
-    // Create CUDA streams
+    // Create CUDA streams first
     cudaStream_t streams[NUM_STREAMS];
     for (int i = 0; i < NUM_STREAMS; i++) {
         CUDA_CHECK(cudaStreamCreate(&streams[i]));
     }
+
+    // Copy data to device asynchronously using different streams
+    CUDA_CHECK(cudaMemcpyAsync(a_d, a_h, N * N * sizeof(half), cudaMemcpyHostToDevice, streams[0]));
+    CUDA_CHECK(cudaMemcpyAsync(b_d, b_h, N * N * sizeof(half), cudaMemcpyHostToDevice, streams[1]));
 
     // Setup timing
     cudaEvent_t start, stop;
