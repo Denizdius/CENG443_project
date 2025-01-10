@@ -171,14 +171,16 @@ int main() {
     printf("\n=== Concurrent HGEMM Performance (Mixed Tensor + Normal) ===\n");
     CUDA_CHECK(cudaEventRecord(start));
     
-    // Launch half tensor cores and half normal cores
+    // First launch all tensor core kernels
     for (int i = 0; i < NUM_STREAMS/2; i++) {
         int offset = i * chunk_size;
-        // Tensor core kernels in first half of streams
         hgemm_tensor_core<<<gridDim_tensor, blockDim_tensor, 0, streams[i]>>>(
             a_d, b_d, c_d, offset, chunk_size);
-        
-        // Normal kernels in second half of streams
+    }
+    
+    // Immediately launch all normal kernels without waiting
+    for (int i = 0; i < NUM_STREAMS/2; i++) {
+        int offset = i * chunk_size;
         hgemm_normal<<<gridDim_normal, blockDim_normal, 0, streams[i + NUM_STREAMS/2]>>>(
             a_d, b_d, c_d, offset + (N/2), chunk_size);
     }
