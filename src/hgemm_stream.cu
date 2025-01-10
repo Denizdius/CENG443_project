@@ -122,6 +122,10 @@ int main() {
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
 
+    // Create mid-event for kernel synchronization
+    cudaEvent_t mid_event;
+    CUDA_CHECK(cudaEventCreate(&mid_event));
+
     // Divide the matrix into NUM_STREAMS parts
     const int chunk_size = (N / NUM_STREAMS / WMMA_M) * WMMA_M;
 
@@ -236,9 +240,12 @@ int main() {
     CUDA_CHECK(cudaFree(b_d));
     CUDA_CHECK(cudaFree(c_d));
     
+    // Cleanup events
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
+    CUDA_CHECK(cudaEventDestroy(mid_event));
     
+    // Cleanup streams
     for (int i = 0; i < NUM_STREAMS; i++) {
         CUDA_CHECK(cudaStreamDestroy(streams[i]));
     }
