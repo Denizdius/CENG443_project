@@ -1,0 +1,67 @@
+RTX_4080_laptop performance 
+
+deniz@denizedu:~/Documents/CENG443_project/src$ ./int8gemm
+
+=== Tensor Core INT8 GEMM Performance ===
+
+=== Regular INT8 GEMM Performance ===
+
+=== Performance Comparison ===
+Matrix size: 1024x1024
+Tensor Core kernel time: 0.295 ms
+Regular kernel time: 1.445 ms
+Speedup: 4.90x
+
+=== Result Verification ===
+Tensor Core C[0][0] = 1024
+Regular C[0][0] = 1024
+Expected value = 1024
+deniz@denizedu:~/Documents/CENG443_project/src$ ./hgemm
+
+=== Tensor Core HGEMM Performance ===
+
+=== Regular HGEMM Performance ===
+
+=== Performance Comparison ===
+Matrix size: 1024x1024
+Tensor Core kernel time: 0.330 ms
+Regular kernel time: 1.442 ms
+Speedup: 4.37x
+
+=== Result Verification ===
+Tensor Core C[0][0] = 1024
+Regular C[0][0] = 1024
+Expected value = 1024
+deniz@denizedu:~/Documents/CENG443_project/src$ ./sgemm
+
+=== Tensor Core SGEMM Performance ===
+
+=== Regular SGEMM Performance ===
+
+=== Performance Comparison ===
+Matrix size: 1024x1024
+Tensor Core kernel time: 0.292 ms
+Regular kernel time: 1.423 ms
+Speedup: 4.87x
+
+=== Result Verification ===
+Tensor Core C[0][0] = 1024
+Regular C[0][0] = 1024
+Expected value = 1024
+deniz@denizedu:~/Documents/CENG443_project/src$ ./dgemm
+
+=== Tensor Core DGEMM Performance ===
+
+=== Regular DGEMM Performance ===
+
+=== Performance Comparison ===
+Matrix size: 1024x1024
+Tensor Core kernel time: 6.490 ms
+Regular kernel time: 5.801 ms
+Speedup: 0.89x
+
+=== Result Verification ===
+Tensor Core C[0][0] = 1024
+Regular C[0][0] = 1024
+Expected value = 1024
+
