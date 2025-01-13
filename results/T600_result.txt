@@ -1,0 +1,52 @@
+denizdius@denizdius-Precision-3561:~/CENG443_project/src$ ./int8gemm_sm75 
+
+=== Tensor Core INT8 GEMM Performance ===
+
+=== Regular INT8 GEMM Performance ===
+
+=== Performance Comparison ===
+Matrix size: 1024x1024
+Tensor Core kernel time: 3.284 ms
+Regular kernel time: 16.198 ms
+Speedup: 4.93x
+
+=== Result Verification ===
+Tensor Core C[0][0] = 1024
+Regular C[0][0] = 1024
+Expected value = 1024
+
+
+denizdius@denizdius-Precision-3561:~/CENG443_project/src$ ./hgemm_sm75 
+
+=== Tensor Core HGEMM Performance ===
+
+=== Regular HGEMM Performance ===
+
+=== Performance Comparison ===
+Matrix size: 1024x1024
+Tensor Core kernel time: 7.226 ms
+Regular kernel time: 11.169 ms
+Speedup: 1.55x
+
+=== Result Verification ===
+Tensor Core C[0][0] = 1024
+Regular C[0][0] = 1024
+Expected value = 1024
+
+denizdius@denizdius-Precision-3561:~/CENG443_project/src$ ./sgemm_sm75 
+
+=== Tensor Core SGEMM Performance ===
+
+=== Regular SGEMM Performance ===
+
+=== Performance Comparison ===
+Matrix size: 1024x1024
+Tensor Core kernel time: 7.178 ms
+Regular kernel time: 17.205 ms
+Speedup: 2.40x
+
+=== Result Verification ===
+Tensor Core C[0][0] = 1024
+Regular C[0][0] = 1024
+Expected value = 1024
+
