@@ -1,3 +1,4 @@
+T600 Laptop GPU results
 denizdius@denizdius-Precision-3561:~/CENG443_project/src$ ./int8gemm_sm75 
 
 === Tensor Core INT8 GEMM Performance ===

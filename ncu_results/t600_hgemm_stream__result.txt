@@ -1,0 +1,13 @@
+
+=== Concurrent HGEMM Performance (Mixed Tensor + Normal) ===
+
+=== Performance Results ===
+Matrix size (Normal): 2048x2048
+Matrix size (Tensor): 2048x2048
+Number of streams: 4
+Mixed version (concurrent tensor + normal) time: 183.443 ms
+
+=== Result Verification ===
+C[0][0] = 2048
+C[1024][0] = 2048
+Expected value = 2048
