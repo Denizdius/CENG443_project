@@ -1,0 +1,64 @@
+root@86018c519cc2:/data/CENG443_project/src# ./int8gemm_sm80
+
+=== Tensor Core INT8 GEMM Performance ===
+
+=== Regular INT8 GEMM Performance ===
+
+=== Performance Comparison ===
+Matrix size: 1024x1024
+Tensor Core kernel time: 0.237 ms
+Regular kernel time: 0.804 ms
+Speedup: 3.39x
+
+=== Result Verification ===
+Tensor Core C[0][0] = 1024
+Regular C[0][0] = 1024
+Expected value = 1024
+root@86018c519cc2:/data/CENG443_project/src# ./hgemm_sm80
+
+=== Tensor Core HGEMM Performance ===
+
+=== Regular HGEMM Performance ===
+
+=== Performance Comparison ===
+Matrix size: 1024x1024
+Tensor Core kernel time: 0.438 ms
+Regular kernel time: 0.637 ms
+Speedup: 1.46x
+
+=== Result Verification ===
+Tensor Core C[0][0] = 1024
+Regular C[0][0] = 1024
+Expected value = 1024
+root@86018c519cc2:/data/CENG443_project/src# ./sgemm_sm80
+
+=== Tensor Core SGEMM Performance ===
+
+=== Regular SGEMM Performance ===
+
+=== Performance Comparison ===
+Matrix size: 1024x1024
+Tensor Core kernel time: 0.245 ms
+Regular kernel time: 0.748 ms
+Speedup: 3.06x
+
+=== Result Verification ===
+Tensor Core C[0][0] = 1024
+Regular C[0][0] = 1024
+Expected value = 1024
+root@86018c519cc2:/data/CENG443_project/src# ./dgemm_sm80
+
+=== Tensor Core DGEMM Performance ===
+
+=== Regular DGEMM Performance ===
+
+=== Performance Comparison ===
+Matrix size: 1024x1024
+Tensor Core kernel time: 0.674 ms
+Regular kernel time: 0.947 ms
+Speedup: 1.40x
+
+=== Result Verification ===
+Tensor Core C[0][0] = 1024
+Regular C[0][0] = 1024
+Expected value = 1024
