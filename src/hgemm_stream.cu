@@ -12,8 +12,8 @@
 #define N_TENSOR 8192  // Size for tensor cores (8x larger)
 #define BLOCK_SIZE 16
 #define WARP_SIZE 32
-#define NUM_STREAMS 2  // One for each kernel type
-#define NUM_CHUNKS 8  // Increase chunks for better interleaving
+#define NUM_STREAMS 4 // One for each kernel type
+#define NUM_CHUNKS 16 // Increase chunks for better interleaving
 #define NUM_STREAMS_PER_TYPE 2  // Keep two streams per type
 
 // WMMA matrix tiles

@@ -1,0 +1,71 @@
+RTX 3070 Laptop Performance
+
+
+dilaygulhan@Dilay:~/cuda_code/CENG443_project/src$ ./int8gemm_sm86
+
+=== Tensor Core INT8 GEMM Performance ===
+
+=== Regular INT8 GEMM Performance ===
+
+=== Performance Comparison ===
+Matrix size: 1024x1024
+Tensor Core kernel time: 0.430 ms
+Regular kernel time: 2.160 ms
+Speedup: 5.03x
+
+=== Result Verification ===
+Tensor Core C[0][0] = 1024
+Regular C[0][0] = 1024
+Expected value = 1024
+
+dilaygulhan@Dilay:~/cuda_code/CENG443_project/src$ ./hgemm_sm86
+
+=== Tensor Core HGEMM Performance ===
+
+=== Regular HGEMM Performance ===
+
+=== Performance Comparison ===
+Matrix size: 1024x1024
+Tensor Core kernel time: 0.373 ms
+Regular kernel time: 2.143 ms
+Speedup: 5.74x
+
+=== Result Verification ===
+Tensor Core C[0][0] = 1024
+Regular C[0][0] = 1024
+Expected value = 1024
+
+
+dilaygulhan@Dilay:~/cuda_code/CENG443_project/src$ ./sgemm_sm86
+
+=== Tensor Core SGEMM Performance ===
+
+=== Regular SGEMM Performance ===
+
+=== Performance Comparison ===
+Matrix size: 1024x1024
+Tensor Core kernel time: 0.396 ms
+Regular kernel time: 2.160 ms
+Speedup: 5.45x
+
+=== Result Verification ===
+Tensor Core C[0][0] = 1024
+Regular C[0][0] = 1024
+Expected value = 1024
+
+dilaygulhan@Dilay:~/cuda_code/CENG443_project/src$ ./dgemm_sm86
+
+=== Tensor Core DGEMM Performance ===
+
+=== Regular DGEMM Performance ===
+
+=== Performance Comparison ===
+Matrix size: 1024x1024
+Tensor Core kernel time: 9.853 ms
+Regular kernel time: 8.615 ms
+Speedup: 0.87x
+
+=== Result Verification ===
+Tensor Core C[0][0] = 1024
+Regular C[0][0] = 1024
+Expected value = 1024
