@@ -25,13 +25,13 @@ const int WMMA_K = 16;
 #define CUDA_CHECK(call) { \
     cudaError_t err = call; \
     if (err != cudaSuccess) { \
-        printf("CUDA error %s:%d: %s\n", _FILE, __LINE_, cudaGetErrorString(err)); \
+        printf("CUDA error %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
         exit(2); \
     } \
 }
 
 // Add non-Tensor Core version of HGEMM
-_global_ void hgemm_normal(const half* A, const half* B, float* C, int start_idx, int chunk_size) {
+__global__ void hgemm_normal(const half* A, const half* B, float* C, int start_idx, int chunk_size) {
     int row = blockIdx.y * blockDim.y + threadIdx.y;
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     
@@ -47,7 +47,7 @@ _global_ void hgemm_normal(const half* A, const half* B, float* C, int start_idx
     }
 }
 
-_global_ void hgemm_tensor_core(const half* A, const half* B, float* C, int start_idx, int chunk_size) {
+__global__ void hgemm_tensor_core(const half* A, const half* B, float* C, int start_idx, int chunk_size) {
     // Calculate warp and matrix positions
     int warpM = (blockIdx.x * blockDim.x + threadIdx.x) / WARP_SIZE;
     int warpN = blockIdx.y;
